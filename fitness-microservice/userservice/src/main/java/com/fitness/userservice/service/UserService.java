@@ -76,10 +76,21 @@ public class UserService
         return userResponse;
     }
 
-    public Boolean existByUserId(String userId)
+    /*public Boolean existByUserId(String userId)
     {
         log.info("Calling user validation API for userId: {}", userId);
         return repository.existsByKeyCloakId(userId); //validating by using keycloak user id.
+    }*/
+
+    public Boolean existByUserId(String userId)
+    {
+        log.info("Checking Keycloak user ID in database: {}", userId);
+
+        boolean exists = repository.existsByKeyCloakId(userId);
+
+        log.info("User exists for Keycloak ID {}: {}", userId, exists);
+
+        return exists;
     }
 
 }

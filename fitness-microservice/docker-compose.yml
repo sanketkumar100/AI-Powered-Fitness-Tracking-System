@@ -1,0 +1,231 @@
+services:
+
+  # ============================================================
+  # PostgreSQL - User Service Database
+  # ============================================================
+  postgres:
+    image: postgres:17
+    container_name: fitness-postgres
+    environment:
+      POSTGRES_DB: fitness_user_db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - fitness-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d fitness_user_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+
+  # ============================================================
+  # MongoDB - Activity / AI Database
+  # ============================================================
+  mongodb:
+    image: mongo:8
+    container_name: fitness-mongodb
+    volumes:
+      - mongodb-data:/data/db
+    networks:
+      - fitness-network
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+
+  # ============================================================
+  # RabbitMQ
+  # ============================================================
+  rabbitmq:
+    image: rabbitmq:3-management
+    container_name: fitness-rabbitmq
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    networks:
+      - fitness-network
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+
+  # ============================================================
+  # Eureka Server
+  # ============================================================
+  eureka-server:
+    build:
+      context: ./eureka
+      dockerfile: Dockerfile
+    image: fitness-eureka
+    container_name: fitness-eureka
+    networks:
+      - fitness-network
+    restart: unless-stopped
+
+
+  # ============================================================
+  # Config Server
+  # ============================================================
+  config-server:
+    build:
+      context: ./configserver
+      dockerfile: Dockerfile
+    image: fitness-config-server
+    container_name: fitness-config-server
+    networks:
+      - fitness-network
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "wget",
+          "--spider",
+          "-q",
+          "http://localhost:8888/actuator/health"
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    restart: unless-stopped
+
+
+  # ============================================================
+  # Keycloak
+  # ============================================================
+  keycloak:
+    image: quay.io/keycloak/keycloak:latest
+    container_name: fitness-keycloak
+    command: start-dev
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN_USERNAME}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD}
+    ports:
+      - "8181:8080"
+    volumes:
+      - keycloak-data:/opt/keycloak/data
+    networks:
+      - fitness-network
+    restart: unless-stopped
+
+
+  # ============================================================
+  # User Service
+  # ============================================================
+  user-service:
+    build:
+      context: ./userservice
+      dockerfile: Dockerfile
+    image: fitness-user-service
+    container_name: fitness-user-service
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    depends_on:
+      config-server:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      eureka-server:
+        condition: service_started
+    networks:
+      - fitness-network
+    restart: unless-stopped
+
+
+  # ============================================================
+  # Activity Service
+  # ============================================================
+  activity-service:
+    build:
+      context: ./activityservice
+      dockerfile: Dockerfile
+    image: fitness-activity-service
+    container_name: fitness-activity-service
+    depends_on:
+      config-server:
+        condition: service_healthy
+      mongodb:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      eureka-server:
+        condition: service_started
+    networks:
+      - fitness-network
+    restart: unless-stopped
+
+
+  # ============================================================
+  # AI Service
+  # ============================================================
+  ai-service:
+    build:
+      context: ./aiservice
+      dockerfile: Dockerfile
+    image: fitness-ai-service
+    container_name: fitness-ai-service
+    environment:
+      GEMINI_API_URL: ${GEMINI_API_URL}
+      GEMINI_API_KEY: ${GEMINI_API_KEY}
+    depends_on:
+      config-server:
+        condition: service_healthy
+      mongodb:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      eureka-server:
+        condition: service_started
+    networks:
+      - fitness-network
+    restart: unless-stopped
+
+
+  # ============================================================
+  # API Gateway - Public Entry Point
+  # ============================================================
+  api-gateway:
+    build:
+      context: ./gateway
+      dockerfile: Dockerfile
+    image: fitness-api-gateway
+    container_name: fitness-api-gateway
+    ports:
+      - "8080:8080"
+    depends_on:
+      config-server:
+        condition: service_healthy
+      eureka-server:
+        condition: service_started
+      keycloak:
+        condition: service_started
+    networks:
+      - fitness-network
+    restart: unless-stopped
+
+
+# ==============================================================
+# Persistent Volumes
+# ==============================================================
+volumes:
+  postgres-data:
+  mongodb-data:
+  rabbitmq-data:
+  keycloak-data:
+
+
+# ==============================================================
+# Network
+# ==============================================================
+networks:
+  fitness-network:
+    driver: bridge
